@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 )
 
-const wikipediaAPIURL = "https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=true&titles=Go_(programming_language)"
+const apiUrl = "https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=true&titles=%s"
 
 type WikiResponse struct {
 	Query struct {
@@ -21,14 +22,17 @@ type WikiResponse struct {
 }
 
 type CleanResponse struct {
-	Title       string `json:"title"`
+	Title          string `json:"title"`
 	FirstParagraph string `json:"first_paragraph"`
 }
 
-func fetchWikipediaData() (*CleanResponse, error) {
+func fetchWikipediaData(title string) (*CleanResponse, error) {
+	encodedTitle := url.QueryEscape(title)
+	apiUrl := fmt.Sprintf(apiUrl, encodedTitle)
+
 	client := &http.Client{}
 
-	resp, err := client.Get(wikipediaAPIURL)
+	resp, err := client.Get(apiUrl)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %v", err)
 	}
@@ -48,7 +52,7 @@ func fetchWikipediaData() (*CleanResponse, error) {
 		paragraphs := strings.Split(cleanText, "\n")
 		if len(paragraphs) > 0 {
 			return &CleanResponse{
-				Title:       page.Title,
+				Title:          page.Title,
 				FirstParagraph: paragraphs[0],
 			}, nil
 		}
@@ -58,19 +62,21 @@ func fetchWikipediaData() (*CleanResponse, error) {
 }
 
 func cleanHTML(html string) string {
-	// Remove HTML tags
 	re := regexp.MustCompile("<[^>]*>")
 	cleanText := re.ReplaceAllString(html, "")
-
-	// Remove extra whitespace
 	cleanText = strings.TrimSpace(cleanText)
 	cleanText = regexp.MustCompile(`\s+`).ReplaceAllString(cleanText, " ")
-
 	return cleanText
 }
 
 func wikiHandler(w http.ResponseWriter, r *http.Request) {
-	data, err := fetchWikipediaData()
+	title := r.URL.Query().Get("title")
+	if title == "" {
+		http.Error(w, "Missing 'title' query parameter", http.StatusBadRequest)
+		return
+	}
+
+	data, err := fetchWikipediaData(title)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -85,6 +91,7 @@ func main() {
 
 	port := "8080"
 	fmt.Printf("Server is running on http://localhost:%s\n", port)
+	fmt.Println("Use /api/wiki?title=Your_Wikipedia_Page_Title to get information")
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
 		os.Exit(1)
