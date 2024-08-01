@@ -6,11 +6,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 )
 
-const apiUrl = "https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=true&titles=%s"
+const apiUrl = "https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&explaintext=1&titles=%s"
 
 type WikiResponse struct {
 	Query struct {
@@ -22,17 +21,17 @@ type WikiResponse struct {
 }
 
 type CleanResponse struct {
-	Title          string `json:"title"`
-	FirstParagraph string `json:"first_paragraph"`
+	Title   string   `json:"title"`
+	Content []string `json:"content"`
 }
 
 func fetchWikipediaData(title string) (*CleanResponse, error) {
 	encodedTitle := url.QueryEscape(title)
-	apiUrl := fmt.Sprintf(apiUrl, encodedTitle)
+	fullUrl := fmt.Sprintf(apiUrl, encodedTitle)
 
 	client := &http.Client{}
 
-	resp, err := client.Get(apiUrl)
+	resp, err := client.Get(fullUrl)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %v", err)
 	}
@@ -48,28 +47,31 @@ func fetchWikipediaData(title string) (*CleanResponse, error) {
 	}
 
 	for _, page := range result.Query.Pages {
-		cleanText := cleanHTML(page.Extract)
-		paragraphs := strings.Split(cleanText, "\n")
-		if len(paragraphs) > 0 {
-			return &CleanResponse{
-				Title:          page.Title,
-				FirstParagraph: paragraphs[0],
-			}, nil
-		}
+		cleanText := cleanContent(page.Extract)
+		return &CleanResponse{
+			Title:   page.Title,
+			Content: cleanText,
+		}, nil
 	}
 
 	return nil, fmt.Errorf("no content found")
 }
 
-func cleanHTML(html string) string {
-	re := regexp.MustCompile("<[^>]*>")
-	cleanText := re.ReplaceAllString(html, "")
-	cleanText = strings.TrimSpace(cleanText)
-	cleanText = regexp.MustCompile(`\s+`).ReplaceAllString(cleanText, " ")
-	return cleanText
+func cleanContent(content string) []string {
+	paragraphs := strings.Split(content, "\n")
+
+	var cleanParagraphs []string
+	for _, p := range paragraphs {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			cleanParagraphs = append(cleanParagraphs, trimmed)
+		}
+	}
+
+	return cleanParagraphs
 }
 
-func wikiHandler(w http.ResponseWriter, r *http.Request) {
+func infoHandler(w http.ResponseWriter, r *http.Request) {
 	title := r.URL.Query().Get("title")
 	if title == "" {
 		http.Error(w, "Missing 'title' query parameter", http.StatusBadRequest)
@@ -87,11 +89,11 @@ func wikiHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	http.HandleFunc("/api/wiki", wikiHandler)
+	http.HandleFunc("/api/info", infoHandler)
 
 	port := "8080"
 	fmt.Printf("Server is running on http://localhost:%s\n", port)
-	fmt.Println("Use /api/wiki?title=Your_Wikipedia_Page_Title to get information")
+	fmt.Println("Use /api/info?title=Your_Wikipedia_Page_Title to get information")
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
 		os.Exit(1)
