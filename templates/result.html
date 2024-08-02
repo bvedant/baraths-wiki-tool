@@ -9,7 +9,21 @@
 <body>
     <h1>{{.Title}}</h1>
     {{range .Content}}
-    <p>{{.}}</p>
+        {{if eq .Type "paragraph"}}
+            <p>{{.Content}}</p>
+        {{else if eq .Type "h2"}}
+            <h2>{{.Content}}</h2>
+        {{else if eq .Type "h3"}}
+            <h3>{{.Content}}</h3>
+        {{else if eq .Type "h4"}}
+            <h4>{{.Content}}</h4>
+        {{else if eq .Type "h5"}}
+            <h5>{{.Content}}</h5>
+        {{else if eq .Type "h6"}}
+            <h6>{{.Content}}</h6>
+        {{else}}
+            <p>{{.Content}}</p>
+        {{end}}
     {{end}}
     <a href="/">Search for another page</a>
 </body>

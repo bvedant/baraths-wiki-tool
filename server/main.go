@@ -22,9 +22,14 @@ type WikiResponse struct {
 	} `json:"query"`
 }
 
+type ContentItem struct {
+	Type    string
+	Content string
+}
+
 type PageData struct {
 	Title   string
-	Content []string
+	Content []ContentItem
 }
 
 func fetchWikipediaData(title string) (*PageData, error) {
@@ -59,18 +64,29 @@ func fetchWikipediaData(title string) (*PageData, error) {
 	return nil, fmt.Errorf("no content found")
 }
 
-func cleanContent(content string) []string {
-	paragraphs := strings.Split(content, "\n")
+func cleanContent(content string) []ContentItem {
+    paragraphs := strings.Split(content, "\n")
 
-	var cleanParagraphs []string
-	for _, p := range paragraphs {
-		trimmed := strings.TrimSpace(p)
-		if trimmed != "" {
-			cleanParagraphs = append(cleanParagraphs, trimmed)
-		}
-	}
+    var cleanItems []ContentItem
+    for _, p := range paragraphs {
+        trimmed := strings.TrimSpace(p)
+        if trimmed != "" {
+            item := ContentItem{Type: "paragraph", Content: trimmed}
+            
+            // Check for headings
+            if strings.HasPrefix(trimmed, "==") && strings.HasSuffix(trimmed, "==") {
+                headingLevel := strings.Count(strings.TrimSpace(strings.Split(trimmed, " ")[0]), "=")
+                if headingLevel >= 2 && headingLevel <= 6 {
+                    item.Type = fmt.Sprintf("h%d", headingLevel)
+                    item.Content = strings.Trim(trimmed, "= ")
+                }
+            }
+            
+            cleanItems = append(cleanItems, item)
+        }
+    }
 
-	return cleanParagraphs
+    return cleanItems
 }
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
