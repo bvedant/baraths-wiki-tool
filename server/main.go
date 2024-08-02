@@ -14,6 +14,7 @@ import (
 )
 
 const apiUrl = "https://en.wikipedia.org/w/api.php"
+const wikipediaBaseURL = "https://en.wikipedia.org"
 
 type PageData struct {
 	Title   string
@@ -31,7 +32,12 @@ func fetchWikipediaContent(title string) (PageData, error) {
 	if err != nil {
 		return PageData{}, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		closeErr := resp.Body.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
 
 	var result struct {
 		Parse struct {
@@ -56,9 +62,10 @@ func fetchWikipediaContent(title string) (PageData, error) {
 		return PageData{}, err
 	}
 
-	// Remove the infobox and edit links
+	// Remove the infobox and edit links, and process links
 	removeInfobox(doc)
 	removeEditLinks(doc)
+	processLinks(doc)
 
 	// Convert the modified HTML back to a string
 	var buf bytes.Buffer
@@ -101,6 +108,21 @@ func removeEditLinks(n *html.Node) {
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		removeEditLinks(c)
+	}
+}
+
+func processLinks(n *html.Node) {
+	if n.Type == html.ElementNode && n.Data == "a" {
+		for i, a := range n.Attr {
+			if a.Key == "href" {
+				if strings.HasPrefix(a.Val, "/wiki/") {
+					n.Attr[i].Val = wikipediaBaseURL + a.Val
+				}
+			}
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		processLinks(c)
 	}
 }
 
