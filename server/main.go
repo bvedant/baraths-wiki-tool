@@ -56,8 +56,9 @@ func fetchWikipediaContent(title string) (PageData, error) {
 		return PageData{}, err
 	}
 
-	// Remove the infobox
+	// Remove the infobox and edit links
 	removeInfobox(doc)
+	removeEditLinks(doc)
 
 	// Convert the modified HTML back to a string
 	var buf bytes.Buffer
@@ -84,6 +85,22 @@ func removeInfobox(n *html.Node) {
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		removeInfobox(c)
+	}
+}
+
+func removeEditLinks(n *html.Node) {
+	if n.Type == html.ElementNode && n.Data == "span" {
+		for _, a := range n.Attr {
+			if a.Key == "class" && strings.Contains(a.Val, "mw-editsection") {
+				if n.Parent != nil {
+					n.Parent.RemoveChild(n)
+				}
+				return
+			}
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		removeEditLinks(c)
 	}
 }
 
