@@ -1,106 +1,127 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/net/html"
 	"html/template"
-	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 )
 
-type WikipediaPage struct {
-	Parse struct {
-		Text json.RawMessage `json:"text"`
-	} `json:"parse"`
+const apiUrl = "https://en.wikipedia.org/w/api.php"
+
+type PageData struct {
+	Title   string
+	Content template.HTML
 }
 
-type Page struct {
-	Query string
-	HTML  template.HTML
+func fetchWikipediaContent(title string) (PageData, error) {
+	params := url.Values{}
+	params.Add("action", "parse")
+	params.Add("format", "json")
+	params.Add("page", title)
+	params.Add("prop", "text")
+
+	resp, err := http.Get(apiUrl + "?" + params.Encode())
+	if err != nil {
+		return PageData{}, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Parse struct {
+			Title string `json:"title"`
+			Text  struct {
+				Content string `json:"*"`
+			} `json:"text"`
+		} `json:"parse"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return PageData{}, err
+	}
+
+	if result.Parse.Title == "" {
+		return PageData{}, fmt.Errorf("no content found for %s", title)
+	}
+
+	// Parse the HTML content
+	doc, err := html.Parse(strings.NewReader(result.Parse.Text.Content))
+	if err != nil {
+		return PageData{}, err
+	}
+
+	// Remove the infobox
+	removeInfobox(doc)
+
+	// Convert the modified HTML back to a string
+	var buf bytes.Buffer
+	if err := html.Render(&buf, doc); err != nil {
+		return PageData{}, err
+	}
+
+	return PageData{
+		Title:   result.Parse.Title,
+		Content: template.HTML(buf.String()),
+	}, nil
+}
+
+func removeInfobox(n *html.Node) {
+	if n.Type == html.ElementNode && n.Data == "table" {
+		for _, a := range n.Attr {
+			if a.Key == "class" && strings.Contains(a.Val, "infobox") {
+				if n.Parent != nil {
+					n.Parent.RemoveChild(n)
+				}
+				return
+			}
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		removeInfobox(c)
+	}
+}
+
+func handleWikipediaRequest(w http.ResponseWriter, r *http.Request) {
+	title := r.URL.Query().Get("title")
+	if title == "" {
+		http.Error(w, "Missing 'title' parameter", http.StatusBadRequest)
+		return
+	}
+
+	pageData, err := fetchWikipediaContent(title)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles(filepath.Join("templates", "index.html"))
+	if err != nil {
+		http.Error(w, "Error parsing template", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.Execute(w, pageData); err != nil {
+		log.Printf("Error executing template: %v", err)
+		http.Error(w, "Error rendering page", http.StatusInternalServerError)
+		return
+	}
 }
 
 func main() {
-	// Create a new HTTP request multiplexer
-	mux := http.NewServeMux()
+	// Serve static files
+	fs := http.FileServer(http.Dir("static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	// Define a handler function for the root URL
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Get the search query parameter
-		query := r.URL.Query().Get("q")
-		if query == "" {
-			query = "Main_Page"
-		}
+	// Handle Wikipedia requests
+	http.HandleFunc("/pageContent", handleWikipediaRequest)
 
-		// Fetch the article content from Wikipedia
-		url := fmt.Sprintf("https://en.wikipedia.org/w/api.php?action=parse&page=%s&format=json", query)
-		resp, err := http.Get(url)
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer func() {
-			err := resp.Body.Close()
-			if err != nil {
-				log.Println(err)
-			}
-		}()
-
-		// Read the response body
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Unmarshal the JSON response
-		var page WikipediaPage
-		err = json.Unmarshal(body, &page)
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Unmarshal the text content
-		var textContent map[string]string
-		err = json.Unmarshal(page.Parse.Text, &textContent)
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Replace relative URLs with absolute URLs
-		html := textContent["*"]
-		html = strings.ReplaceAll(html, `href="/wiki/`, `href="https://en.wikipedia.org/wiki/`)
-		html = strings.ReplaceAll(html, `href="#`, `href="https://en.wikipedia.org/wiki/`+query+`#`)
-
-		// Render the template
-		tmpl, err := template.ParseFiles("templates/index.html")
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Write the HTML content to the response writer
-		w.Header().Set("Content-Type", "text/html")
-		err = tmpl.Execute(w, Page{Query: query, HTML: template.HTML(html)})
-		if err != nil {
-			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	})
-
-	// Start the web server
-	fmt.Println("Server listening on port 8080")
-	err := http.ListenAndServe(":8080", mux)
-	if err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println("Server starting on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
