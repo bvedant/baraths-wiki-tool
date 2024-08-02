@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -20,12 +22,12 @@ type WikiResponse struct {
 	} `json:"query"`
 }
 
-type CleanResponse struct {
-	Title   string   `json:"title"`
-	Content []string `json:"content"`
+type PageData struct {
+	Title   string
+	Content []string
 }
 
-func fetchWikipediaData(title string) (*CleanResponse, error) {
+func fetchWikipediaData(title string) (*PageData, error) {
 	encodedTitle := url.QueryEscape(title)
 	fullUrl := fmt.Sprintf(apiUrl, encodedTitle)
 
@@ -48,7 +50,7 @@ func fetchWikipediaData(title string) (*CleanResponse, error) {
 
 	for _, page := range result.Query.Pages {
 		cleanText := cleanContent(page.Extract)
-		return &CleanResponse{
+		return &PageData{
 			Title:   page.Title,
 			Content: cleanText,
 		}, nil
@@ -72,9 +74,14 @@ func cleanContent(content string) []string {
 }
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	title := r.URL.Query().Get("title")
 	if title == "" {
-		http.Error(w, "Missing 'title' query parameter", http.StatusBadRequest)
+		renderTemplate(w, "index.html", nil)
 		return
 	}
 
@@ -84,16 +91,28 @@ func infoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	renderTemplate(w, "result.html", data)
+}
+
+func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
+	templatesDir := filepath.Join("templates")
+	t, err := template.ParseFiles(filepath.Join(templatesDir, tmpl))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	t.Execute(w, data)
 }
 
 func main() {
-	http.HandleFunc("/api/info", infoHandler)
+	http.HandleFunc("/", infoHandler)
+
+	// Serve static files
+	fs := http.FileServer(http.Dir("static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	port := "8080"
 	fmt.Printf("Server is running on http://localhost:%s\n", port)
-	fmt.Println("Use /api/info?title=Your_Wikipedia_Page_Title to get information")
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
 		os.Exit(1)
