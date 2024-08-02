@@ -8,28 +8,27 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-const apiUrl = "https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&explaintext=1&titles=%s"
+const apiUrl = "https://en.wikipedia.org/w/api.php?action=parse&format=json&prop=text&page=%s"
 
 type WikiResponse struct {
-	Query struct {
-		Pages map[string]struct {
-			Title   string `json:"title"`
-			Extract string `json:"extract"`
-		} `json:"pages"`
-	} `json:"query"`
+	Parse struct {
+		Title string `json:"title"`
+		Text  struct {
+			Content string `json:"*"`
+		} `json:"text"`
+	} `json:"parse"`
 }
 
 type ContentItem struct {
 	Type    string
-	Content string
+	Content template.HTML
 }
 
 type PageData struct {
 	Title   string
-	Content []ContentItem
+	Content template.HTML
 }
 
 func fetchWikipediaData(title string) (*PageData, error) {
@@ -53,40 +52,10 @@ func fetchWikipediaData(title string) (*PageData, error) {
 		return nil, fmt.Errorf("error decoding response: %v", err)
 	}
 
-	for _, page := range result.Query.Pages {
-		cleanText := cleanContent(page.Extract)
-		return &PageData{
-			Title:   page.Title,
-			Content: cleanText,
-		}, nil
-	}
-
-	return nil, fmt.Errorf("no content found")
-}
-
-func cleanContent(content string) []ContentItem {
-    paragraphs := strings.Split(content, "\n")
-
-    var cleanItems []ContentItem
-    for _, p := range paragraphs {
-        trimmed := strings.TrimSpace(p)
-        if trimmed != "" {
-            item := ContentItem{Type: "paragraph", Content: trimmed}
-            
-            // Check for headings
-            if strings.HasPrefix(trimmed, "==") && strings.HasSuffix(trimmed, "==") {
-                headingLevel := strings.Count(strings.TrimSpace(strings.Split(trimmed, " ")[0]), "=")
-                if headingLevel >= 2 && headingLevel <= 6 {
-                    item.Type = fmt.Sprintf("h%d", headingLevel)
-                    item.Content = strings.Trim(trimmed, "= ")
-                }
-            }
-            
-            cleanItems = append(cleanItems, item)
-        }
-    }
-
-    return cleanItems
+	return &PageData{
+		Title:   result.Parse.Title,
+		Content: template.HTML(result.Parse.Text.Content),
+	}, nil
 }
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
